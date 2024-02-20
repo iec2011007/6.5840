@@ -1,10 +1,15 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net/rpc"
+	"os"
+	"sort"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -12,6 +17,17 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+const TASK_REQUEST_TIME = 1 * time.Second
+const TASK_REQUEST_RETRY = 3
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -25,18 +41,89 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
+	log.SetFlags(log.Lshortfile)
 	// Your worker implementation here.
-
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	processId := os.Getuid()
+	requestRetry := 0
+
+	// Loop break condition is susceptible to transient network issue.
+	// TODO: find a more robust condition.
+	for reply, apiCallSuccess := getNextFile(); apiCallSuccess && reply.IsAvailable && requestRetry < TASK_REQUEST_RETRY; reply, apiCallSuccess = getNextFile() {
+		filename := reply.FileName
+		taskId := reply.TaskId
+		nReducer := reply.NumReducer
+		var mapStore map[int][]KeyValue = make(map[int][]KeyValue)
+		fmt.Printf("Processing fileName: %v nReducer: %v, status: %v", filename, nReducer, apiCallSuccess)
+
+		// This states that even though API replied 200 there can be empty result. This condition solves this issue
+		if reply.IsAvailable {
+			content := getFileContent(filename)
+			kva := mapf(filename, content)
+
+			// grouping data for each reducer
+			for _, kv := range kva {
+				idx := ihash(kv.Key) % nReducer
+				oldValue, ok := mapStore[idx]
+				if ok {
+					mapStore[idx] = append(oldValue, kv)
+				} else {
+					mapStore[idx] = []KeyValue{kv}
+				}
+			}
+
+			for reducerKey, value := range mapStore {
+				outputFileName := fmt.Sprintf("mr-%v-%v-%v-tmp", processId, reducerKey, taskId)
+				ofile, _ := os.Create(outputFileName)
+				enc := json.NewEncoder(ofile)
+				sort.Sort(ByKey(value))
+				enc.Encode(value)
+				defer ofile.Close()
+			}
+			requestRetry = 0
+			taskCompletionResp, taskApiStatus := updateMapTaskStatus(taskId)
+			if !taskApiStatus || !taskCompletionResp.Ack {
+				log.Fatalf("could not update map task status reponse: %v\n", taskCompletionResp)
+			}
+		} else {
+			requestRetry++
+		}
+		// wait for some time before requesting new tasks.
+		time.Sleep(TASK_REQUEST_TIME)
+	}
+	// All the MAP tasks are completed and we can start the reducer workflow
+
+}
+
+func getFileContent(filename string) string {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	defer file.Close()
+	return string(content)
+}
+
+func getNextFile() (apiReply GetFileReply, apiRes bool) {
 	args := GetFileRequest{}
 	resp := GetFileReply{}
-	ok := call("Coordinator.GetFile", &args, &resp)
-	if ok {
-		fmt.Printf("fileName: %v", resp.FileName)
-	} else {
-		fmt.Printf("Call failed")
-	}
+	callResult := call("Coordinator.GetFile", &args, &resp)
+	log.Printf("Response for getNextFile from server: %v\n", resp)
+	return resp, callResult
+}
+
+func updateMapTaskStatus(taskId int) (TaskCompletionResponse, bool) {
+	args := TaskCompletionRequest{Id: taskId, Type: "map"}
+	resp := TaskCompletionResponse{}
+	log.Printf("Update TaskCompletion %v\n", args)
+	callResult := call("Coordinator.UpdateTaskCompletion", &args, &resp)
+	log.Printf("Response for updateMapTaskStatus from server: %v\n", resp)
+	return resp, callResult
 }
 
 // example function to show how to make an RPC call to the coordinator.

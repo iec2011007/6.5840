@@ -6,8 +6,11 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
-import "strconv"
+import (
+	"fmt"
+	"os"
+	"strconv"
+)
 
 //
 // example to show how to declare the arguments
@@ -26,7 +29,22 @@ type ExampleReply struct {
 
 type GetFileRequest struct{}
 type GetFileReply struct {
-	FileName string
+	TaskId      int
+	FileName    string
+	IsAvailable bool
+	NumReducer  int
+}
+
+type TaskCompletionRequest struct {
+	Id   int
+	Type string
+}
+type TaskCompletionResponse struct {
+	Ack bool
+}
+
+func (reply GetFileReply) String() string {
+	return fmt.Sprintf("{id: %v, fileName: %v, numReducer: %v, isAvailable: %v}", reply.TaskId, reply.FileName, reply.NumReducer, reply.IsAvailable)
 }
 
 // Cook up a unique-ish UNIX-domain socket name
