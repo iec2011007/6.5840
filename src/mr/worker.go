@@ -20,6 +20,9 @@ type KeyValue struct {
 
 const TASK_REQUEST_TIME = 1 * time.Second
 const TASK_REQUEST_RETRY = 3
+const MAX_MAP_TASKS = 10
+const MAP_TEMP_FILE_FORMAT = "mr-out-%v-%v-%v-tmp"
+const MAP_OUT_FILE_FORMAT = "mr-out-%v-%v"
 
 // for sorting by key.
 type ByKey []KeyValue
@@ -38,8 +41,7 @@ func ihash(key string) int {
 }
 
 // main/mrworker.go calls this function.
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
 	log.SetFlags(log.Lshortfile)
 	// Your worker implementation here.
@@ -54,7 +56,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		filename := reply.FileName
 		taskId := reply.TaskId
 		nReducer := reply.NumReducer
-		var mapStore map[int][]KeyValue = make(map[int][]KeyValue)
+
 		fmt.Printf("Processing fileName: %v nReducer: %v, status: %v", filename, nReducer, apiCallSuccess)
 
 		// This states that even though API replied 200 there can be empty result. This condition solves this issue
@@ -62,25 +64,10 @@ func Worker(mapf func(string, string) []KeyValue,
 			content := getFileContent(filename)
 			kva := mapf(filename, content)
 
-			// grouping data for each reducer
-			for _, kv := range kva {
-				idx := ihash(kv.Key) % nReducer
-				oldValue, ok := mapStore[idx]
-				if ok {
-					mapStore[idx] = append(oldValue, kv)
-				} else {
-					mapStore[idx] = []KeyValue{kv}
-				}
-			}
+			mapStore := groupMapperOutput(kva, nReducer)
+			createMapperTempFiles(mapStore, processId, taskId)
+			createMapOutFiles(processId, taskId, nReducer)
 
-			for reducerKey, value := range mapStore {
-				outputFileName := fmt.Sprintf("mr-%v-%v-%v-tmp", processId, reducerKey, taskId)
-				ofile, _ := os.Create(outputFileName)
-				enc := json.NewEncoder(ofile)
-				sort.Sort(ByKey(value))
-				enc.Encode(value)
-				defer ofile.Close()
-			}
 			requestRetry = 0
 			taskCompletionResp, taskApiStatus := updateMapTaskStatus(taskId)
 			if !taskApiStatus || !taskCompletionResp.Ack {
@@ -94,6 +81,39 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 	// All the MAP tasks are completed and we can start the reducer workflow
 
+}
+
+func createMapOutFiles(processId int, taskId int, nReducer int) {
+	for reducerNum := 0; reducerNum < nReducer; reducerNum++ {
+		oldFileName := fmt.Sprintf(MAP_TEMP_FILE_FORMAT, processId, reducerNum, taskId)
+		newFileName := fmt.Sprintf(MAP_OUT_FILE_FORMAT, taskId, reducerNum)
+		os.Rename(oldFileName, newFileName)
+	}
+}
+
+func createMapperTempFiles(mapStore map[int][]KeyValue, processId int, taskId int) {
+	for reducerKey, value := range mapStore {
+		outputFileName := fmt.Sprintf(MAP_TEMP_FILE_FORMAT, processId, reducerKey, taskId)
+		ofile, _ := os.Create(outputFileName)
+		enc := json.NewEncoder(ofile)
+		sort.Sort(ByKey(value))
+		enc.Encode(value)
+		defer ofile.Close()
+	}
+}
+
+func groupMapperOutput(kva []KeyValue, nReducer int) map[int][]KeyValue {
+	var mapStore map[int][]KeyValue = make(map[int][]KeyValue)
+	for _, kv := range kva {
+		idx := ihash(kv.Key) % nReducer
+		oldValue, ok := mapStore[idx]
+		if ok {
+			mapStore[idx] = append(oldValue, kv)
+		} else {
+			mapStore[idx] = []KeyValue{kv}
+		}
+	}
+	return mapStore
 }
 
 func getFileContent(filename string) string {
