@@ -37,10 +37,16 @@ type GetFileReply struct {
 
 type TaskCompletionRequest struct {
 	Id   int
-	Type string
+	Type ProcessType
 }
 type TaskCompletionResponse struct {
 	Ack bool
+}
+
+type GetReduceTaskRequest struct{}
+type GetReduceTaskResponse struct {
+	ReducerId   int
+	IsAvailable bool
 }
 
 func (reply GetFileReply) String() string {

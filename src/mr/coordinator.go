@@ -27,7 +27,7 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) GetFile(args *GetFileRequest, reply *GetFileReply) error {
-	task, error := c.taskTracker.AssignAvailableTask()
+	task, error := c.taskTracker.AssignAvailableTask(MAP)
 
 	reply.NumReducer = c.nReduce
 	if error == nil {
@@ -41,8 +41,20 @@ func (c *Coordinator) GetFile(args *GetFileRequest, reply *GetFileReply) error {
 	return nil
 }
 
+func (c *Coordinator) GetReduceTask(args *GetFileRequest, reply *GetReduceTaskResponse) error {
+	task, error := c.taskTracker.AssignAvailableTask(REDUCE)
+	if error == nil {
+		reply.ReducerId = task.id
+		reply.IsAvailable = true
+	} else {
+		reply.IsAvailable = false
+	}
+	log.Printf("Reply from Server: %v\n", reply)
+	return nil
+}
+
 func (c *Coordinator) UpdateTaskCompletion(request *TaskCompletionRequest, reply *TaskCompletionResponse) error {
-	ok := c.taskTracker.UpdateMapTaskCompletion(request.Id)
+	ok := c.taskTracker.UpdateTaskCompletion(request.Id, request.Type)
 	if !ok {
 		return fmt.Errorf("no map task found with id: %v", request.Id)
 	}
@@ -78,7 +90,7 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	log.SetFlags(log.Lshortfile)
 	log.Printf("Received args: %v and nReduce: %v", files, nReduce)
-	ts := NewTaskScheduler(files)
+	ts := NewTaskTracker(files, nReduce)
 	c := Coordinator{taskTracker: ts, nReduce: nReduce}
 
 	// Your code here.

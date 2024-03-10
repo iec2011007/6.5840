@@ -8,7 +8,8 @@ import (
 )
 
 type TaskTracker struct {
-	MapTasks []Task
+	MapTasks    []Task
+	ReduceTasks []Task
 }
 
 const TASK_TIMEOUT time.Duration = 10 * time.Second
@@ -19,6 +20,13 @@ const (
 	PENDING = iota
 	IN_PROGRESS
 	COMPLETED
+)
+
+type ProcessType int
+
+const (
+	MAP = iota
+	REDUCE
 )
 
 type Task struct {
@@ -51,26 +59,45 @@ func NewTask(taskName string, id int) Task {
 	return Task{id: id, name: taskName, status: PENDING, assignedTime: time.Unix(0, 0)}
 }
 
-func NewTaskScheduler(files []string) *TaskTracker {
-	tasksArr := make([]Task, len(files))
-	ts := TaskTracker{MapTasks: tasksArr}
+func NewReduceTask(id int) Task {
+	return NewTask("", id)
+}
+
+func NewTaskTracker(files []string, nReduce int) *TaskTracker {
+	mapTasks := make([]Task, len(files))
+	reduceTasks := make([]Task, nReduce)
+	ts := TaskTracker{MapTasks: mapTasks, ReduceTasks: reduceTasks}
 	for idx, fName := range files {
 		task := NewTask(fName, idx)
-		tasksArr[idx] = task
+		mapTasks[idx] = task
+	}
+	for idx := 0; idx < nReduce; idx++ {
+		task := NewReduceTask(idx)
+		reduceTasks[idx] = task
 	}
 	return &ts
 }
 
-func (tracker *TaskTracker) UpdateMapTaskCompletion(taskId int) bool {
-	for i := 0; i < len(tracker.MapTasks); i++ {
-		task := tracker.MapTasks[i]
+func (tracker *TaskTracker) UpdateTaskCompletion(taskId int, pType ProcessType) bool {
+	tasks := tracker.getTasks(pType)
+	for i := 0; i < len(tasks); i++ {
+		task := tasks[i]
 		if task.id == taskId {
 			task.status = COMPLETED
-			tracker.MapTasks[i] = task
+			task.assignedTime = time.Now()
+			tasks[i] = task
 			return true
 		}
 	}
 	return false
+}
+
+func (ts *TaskTracker) getTasks(pType ProcessType) []Task {
+	var tasks []Task
+	if tasks = ts.MapTasks; pType != MAP {
+		tasks = ts.ReduceTasks
+	}
+	return tasks
 }
 
 /*
@@ -79,17 +106,17 @@ AssignAvailableTask returns any pending tasks or any task running for more than 
 If no such task is available then it returns empty path.
 Usage check if task is available then use the response of fileName
 */
-func (ts *TaskTracker) AssignAvailableTask() (Task, error) {
-	log.Println(ts.MapTasks)
+func (ts *TaskTracker) AssignAvailableTask(pType ProcessType) (Task, error) {
+	tasks := ts.getTasks(pType)
 	// https://www.calhoun.io/does-range-copy-the-slice-in-go/
-	for i := 0; i < len(ts.MapTasks); i++ {
-		task := ts.MapTasks[i]
+	for i := 0; i < len(tasks); i++ {
+		task := tasks[i]
 		if task.status == PENDING || isTaskStuck(task) {
 			// This task can be reassigned
 			task.status = IN_PROGRESS
 			task.assignedTime = time.Now()
 			log.Printf("assigning task: %v", task)
-			ts.MapTasks[i] = task
+			tasks[i] = task
 			return task, nil
 		}
 	}

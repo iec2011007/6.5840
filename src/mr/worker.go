@@ -22,7 +22,7 @@ const TASK_REQUEST_TIME = 1 * time.Second
 const TASK_REQUEST_RETRY = 3
 const MAX_MAP_TASKS = 10
 const MAP_TEMP_FILE_FORMAT = "mr-out-%v-%v-%v-tmp"
-const MAP_OUT_FILE_FORMAT = "mr-out-%v-%v"
+const MAP_OUT_FILE_FORMAT = "mr-out-%v-%v" // Map Task Id, ReducerId
 
 // for sorting by key.
 type ByKey []KeyValue
@@ -81,6 +81,25 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	}
 	// All the MAP tasks are completed and we can start the reducer workflow
 
+	// for rdReply, rdAPISuccess := getReduceTask(); rdAPISuccess && rdReply.IsAvailable; rdReply, rdAPISuccess = getReduceTask() {
+	// 	var kva []KeyValue
+	// 	for mapFileIdx := 0; mapFileIdx < MAX_MAP_TASKS; mapFileIdx++ {
+	// 		mapFileName := fmt.Sprintf(MAP_OUT_FILE_FORMAT, mapFileIdx, rdReply.ReducerId)
+	// 		file, err := os.Open(mapFileName)
+	// 		if err != nil {
+	// 			log.Fatalf("cannot open %v", mapFileName)
+	// 		}
+	// 		dec := json.NewDecoder(file)
+	// 		for {
+	// 			var kv KeyValue
+	// 			if err := dec.Decode(&kv); err != nil {
+	// 				break
+	// 			}
+	// 			kva = append(kva, kv)
+	// 		}
+	// 	}
+	// }
+
 }
 
 func createMapOutFiles(processId int, taskId int, nReducer int) {
@@ -137,8 +156,16 @@ func getNextFile() (apiReply GetFileReply, apiRes bool) {
 	return resp, callResult
 }
 
+func getReduceTask() (GetReduceTaskResponse, bool) {
+	args := GetReduceTaskRequest{}
+	resp := GetReduceTaskResponse{}
+	callResult := call("Coordinator.GetReduceTask", &args, &resp)
+	log.Printf("Response for getNextFile from server: %v\n", resp)
+	return resp, callResult
+}
+
 func updateMapTaskStatus(taskId int) (TaskCompletionResponse, bool) {
-	args := TaskCompletionRequest{Id: taskId, Type: "map"}
+	args := TaskCompletionRequest{Id: taskId, Type: MAP}
 	resp := TaskCompletionResponse{}
 	log.Printf("Update TaskCompletion %v\n", args)
 	callResult := call("Coordinator.UpdateTaskCompletion", &args, &resp)
